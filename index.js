@@ -1,4 +1,4 @@
-// Shopify Inventory Check API Middleware
+// Shopify Inventory Check & Order Placement API
 // Deploy this to Vercel, Netlify Functions, or similar serverless platform
 
 require('dotenv').config();
@@ -27,6 +27,8 @@ if (!SHOPIFY_CONFIG.shop_domain || !SHOPIFY_CONFIG.access_token) {
     console.error('Missing required environment variables: SHOPIFY_SHOP_DOMAIN or SHOPIFY_ACCESS_TOKEN');
     process.exit(1);
 }
+
+// ===== INVENTORY CHECK FUNCTIONS =====
 
 // Helper function to search Shopify products
 async function searchShopifyProducts(query) {
@@ -111,7 +113,85 @@ function findBestVariant(products, requestedVariant) {
     return results.sort((a, b) => b.match_score - a.match_score);
 }
 
-// Main API endpoint
+// ===== ORDER PLACEMENT FUNCTIONS =====
+
+// Helper function to create Shopify order
+async function createShopifyOrder(orderData) {
+    try {
+        const url = `https://${SHOPIFY_CONFIG.shop_domain}/admin/api/2023-10/orders.json`;
+        
+        const shopifyOrder = {
+            order: {
+                line_items: orderData.line_items,
+                customer: orderData.customer,
+                billing_address: orderData.billing_address,
+                shipping_address: orderData.shipping_address,
+                financial_status: 'pending',
+                fulfillment_status: null,
+                note: orderData.note || 'Order placed via Bland AI',
+                tags: 'bland-ai,phone-order',
+                send_receipt: true,
+                send_fulfillment_receipt: true
+            }
+        };
+
+        const response = await axios.post(url, shopifyOrder, {
+            headers: {
+                'X-Shopify-Access-Token': SHOPIFY_CONFIG.access_token,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        return response.data.order;
+    } catch (error) {
+        console.error('Shopify Order Creation Error:', error.response?.data || error.message);
+        throw new Error('Failed to create Shopify order');
+    }
+}
+
+// Helper function to validate inventory before order
+async function validateInventoryForOrder(lineItems) {
+    const results = [];
+    
+    for (const item of lineItems) {
+        try {
+            const url = `https://${SHOPIFY_CONFIG.shop_domain}/admin/api/2023-10/variants/${item.variant_id}.json`;
+            
+            const response = await axios.get(url, {
+                headers: {
+                    'X-Shopify-Access-Token': SHOPIFY_CONFIG.access_token,
+                    'Content-Type': 'application/json'
+                }
+            });
+            
+            const variant = response.data.variant;
+            const available = variant.inventory_quantity >= item.quantity;
+            
+            results.push({
+                variant_id: item.variant_id,
+                requested_quantity: item.quantity,
+                available_quantity: variant.inventory_quantity,
+                available: available,
+                title: variant.title,
+                price: variant.price
+            });
+            
+        } catch (error) {
+            console.error(`Error checking variant ${item.variant_id}:`, error.message);
+            results.push({
+                variant_id: item.variant_id,
+                available: false,
+                error: 'Could not verify inventory'
+            });
+        }
+    }
+    
+    return results;
+}
+
+// ===== API ENDPOINTS =====
+
+// Inventory check endpoint (existing)
 app.post('/check-inventory', async (req, res) => {
     try {
         const { product_name, variant_details, call_id } = req.body;
@@ -142,7 +222,7 @@ app.post('/check-inventory', async (req, res) => {
             // Send to Make.com for logging/processing
             if (MAKE_WEBHOOK_URL) {
                 try {
-                    await axios.post(MAKE_WEBHOOK_URL, response);
+                    await axios.post(MAKE_WEBHOOK_URL, { ...response, type: 'inventory_check' });
                 } catch (makeError) {
                     console.error('Make.com webhook error:', makeError.message);
                 }
@@ -203,7 +283,7 @@ app.post('/check-inventory', async (req, res) => {
         // Send to Make.com for additional processing/logging
         if (MAKE_WEBHOOK_URL) {
             try {
-                await axios.post(MAKE_WEBHOOK_URL, response);
+                await axios.post(MAKE_WEBHOOK_URL, { ...response, type: 'inventory_check' });
             } catch (makeError) {
                 console.error('Make.com webhook error:', makeError.message);
             }
@@ -221,6 +301,140 @@ app.post('/check-inventory', async (req, res) => {
     }
 });
 
+// Order placement endpoint (new)
+app.post('/place-order', async (req, res) => {
+    try {
+        const { 
+            customer_info, 
+            line_items, 
+            shipping_address, 
+            billing_address,
+            special_instructions,
+            call_id 
+        } = req.body;
+        
+        // Validate required fields
+        if (!customer_info || !customer_info.email) {
+            return res.status(400).json({
+                success: false,
+                error: 'Customer email is required'
+            });
+        }
+        
+        if (!line_items || line_items.length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'At least one item is required'
+            });
+        }
+        
+        console.log(`Processing order for: ${customer_info.email}`);
+        
+        // Validate inventory availability
+        const inventoryCheck = await validateInventoryForOrder(line_items);
+        const unavailableItems = inventoryCheck.filter(item => !item.available);
+        
+        if (unavailableItems.length > 0) {
+            const unavailableList = unavailableItems.map(item => 
+                `${item.title || 'Item'} (requested: ${item.requested_quantity}, available: ${item.available_quantity || 0})`
+            ).join(', ');
+            
+            const response = {
+                success: false,
+                error: 'insufficient_inventory',
+                message: `Sorry, some items are not available in the requested quantities: ${unavailableList}. Please adjust your order or check our current inventory.`,
+                unavailable_items: unavailableItems,
+                call_id
+            };
+            
+            // Log to Make.com
+            if (MAKE_WEBHOOK_URL) {
+                try {
+                    await axios.post(MAKE_WEBHOOK_URL, { ...response, type: 'order_failed' });
+                } catch (makeError) {
+                    console.error('Make.com webhook error:', makeError.message);
+                }
+            }
+            
+            return res.json(response);
+        }
+        
+        // Create the order
+        const orderData = {
+            customer: {
+                first_name: customer_info.first_name,
+                last_name: customer_info.last_name,
+                email: customer_info.email,
+                phone: customer_info.phone
+            },
+            line_items: line_items.map(item => ({
+                variant_id: item.variant_id,
+                quantity: item.quantity,
+                price: item.price
+            })),
+            billing_address: billing_address || {
+                first_name: customer_info.first_name,
+                last_name: customer_info.last_name,
+                address1: shipping_address?.address1,
+                city: shipping_address?.city,
+                province: shipping_address?.province,
+                country: shipping_address?.country,
+                zip: shipping_address?.zip,
+                phone: customer_info.phone
+            },
+            shipping_address: shipping_address,
+            note: special_instructions
+        };
+        
+        const createdOrder = await createShopifyOrder(orderData);
+        
+        // Calculate total
+        const totalAmount = createdOrder.total_price;
+        const itemCount = createdOrder.line_items.reduce((sum, item) => sum + item.quantity, 0);
+        
+        const response = {
+            success: true,
+            message: `Perfect! I've successfully placed your order #${createdOrder.order_number}. Your total is $${totalAmount} for ${itemCount} item${itemCount > 1 ? 's' : ''}. You'll receive a confirmation email at ${customer_info.email} shortly.`,
+            order: {
+                order_number: createdOrder.order_number,
+                order_id: createdOrder.id,
+                total_price: totalAmount,
+                currency: createdOrder.currency,
+                customer_email: customer_info.email,
+                line_items: createdOrder.line_items.map(item => ({
+                    title: item.title,
+                    quantity: item.quantity,
+                    price: item.price
+                }))
+            },
+            call_id
+        };
+        
+        // Send to Make.com for additional processing
+        if (MAKE_WEBHOOK_URL) {
+            try {
+                await axios.post(MAKE_WEBHOOK_URL, { ...response, type: 'order_success' });
+            } catch (makeError) {
+                console.error('Make.com webhook error:', makeError.message);
+            }
+        }
+        
+        res.json(response);
+        
+    } catch (error) {
+        console.error('Order Creation Error:', error);
+        
+        const errorResponse = {
+            success: false,
+            error: 'order_creation_failed',
+            message: 'I apologize, but I encountered an error while placing your order. Please try again or contact our support team.',
+            call_id: req.body.call_id
+        };
+        
+        res.status(500).json(errorResponse);
+    }
+});
+
 // Health check endpoint
 app.get('/health', (req, res) => {
     res.json({ status: 'OK', timestamp: new Date().toISOString() });
@@ -230,7 +444,7 @@ app.get('/health', (req, res) => {
 const PORT = process.env.PORT || 3000;
 if (require.main === module) {
     app.listen(PORT, () => {
-        console.log(`Shopify Inventory API running on port ${PORT}`);
+        console.log(`Shopify API running on port ${PORT}`);
     });
 }
 
