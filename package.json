@@ -1,0 +1,18 @@
+{
+  "name": "shopify-inventory-api",
+  "version": "1.0.0",
+  "description": "Shopify inventory check API for Bland AI",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node index.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "dotenv": "^16.6.1",
+    "express": "^4.18.2"
+  },
+  "engines": {
+    "node": "18.x"
+  }
+}
