@@ -1,4 +1,4 @@
-// Shopify Inventory Check & Order Placement API
+// Enhanced Shopify Inventory Check & Order Placement API with Payment Processing
 // Deploy this to Vercel, Netlify Functions, or similar serverless platform
 
 require('dotenv').config();
@@ -115,7 +115,39 @@ function findBestVariant(products, requestedVariant) {
 
 // ===== ORDER PLACEMENT FUNCTIONS =====
 
-// Helper function to create Shopify order
+// Helper function to create Shopify draft order
+async function createShopifyDraftOrder(orderData) {
+    try {
+        const url = `https://${SHOPIFY_CONFIG.shop_domain}/admin/api/2023-10/draft_orders.json`;
+        const draftOrder = {
+            draft_order: {
+                line_items: orderData.line_items,
+                customer: orderData.customer,
+                billing_address: orderData.billing_address,
+                shipping_address: orderData.shipping_address,
+                note: orderData.note || 'Draft order created via Bland AI phone call',
+                tags: 'bland-ai,phone-order,draft',
+                email: orderData.customer.email,
+                send_invoice: false, // We'll send custom payment link
+                use_customer_default_address: false
+            }
+        };
+
+        const response = await axios.post(url, draftOrder, {
+            headers: {
+                'X-Shopify-Access-Token': SHOPIFY_CONFIG.access_token,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        return response.data.draft_order;
+    } catch (error) {
+        console.error('Shopify Draft Order Creation Error:', error.response?.data || error.message);
+        throw new Error('Failed to create Shopify draft order');
+    }
+}
+
+// Helper function to create Shopify order (original function)
 async function createShopifyOrder(orderData) {
     try {
         const url = `https://${SHOPIFY_CONFIG.shop_domain}/admin/api/2023-10/orders.json`;
@@ -146,6 +178,36 @@ async function createShopifyOrder(orderData) {
     } catch (error) {
         console.error('Shopify Order Creation Error:', error.response?.data || error.message);
         throw new Error('Failed to create Shopify order');
+    }
+}
+
+// Helper function to generate payment link
+function generatePaymentLink(draftOrder) {
+    // Shopify automatically generates payment URLs for draft orders
+    return `https://${SHOPIFY_CONFIG.shop_domain}/orders/${draftOrder.id}/checkout`;
+}
+
+// Helper function to send payment link (via Make.com)
+async function sendPaymentLink(paymentData) {
+    try {
+        const payload = {
+            type: 'send_payment_link',
+            customer_email: paymentData.customer_email,
+            customer_phone: paymentData.customer_phone,
+            payment_url: paymentData.payment_url,
+            order_number: paymentData.order_number,
+            total_amount: paymentData.total_amount,
+            expires_at: paymentData.expires_at,
+            call_id: paymentData.call_id
+        };
+
+        if (MAKE_WEBHOOK_URL) {
+            await axios.post(MAKE_WEBHOOK_URL, payload);
+        }
+        return { success: true };
+    } catch (error) {
+        console.error('Payment link sending error:', error.message);
+        return { success: false, error: error.message };
     }
 }
 
@@ -191,7 +253,7 @@ async function validateInventoryForOrder(lineItems) {
 
 // ===== API ENDPOINTS =====
 
-// Inventory check endpoint (existing)
+// Inventory check endpoint
 app.post('/check-inventory', async (req, res) => {
     try {
         const { product_name, variant_details, call_id } = req.body;
@@ -301,8 +363,159 @@ app.post('/check-inventory', async (req, res) => {
     }
 });
 
-// Order placement endpoint (new)
+// Enhanced order placement endpoint with payment processing (draft orders)
 app.post('/place-order', async (req, res) => {
+    try {
+        const {
+            customer_info,
+            line_items,
+            shipping_address,
+            billing_address,
+            special_instructions,
+            call_id
+        } = req.body;
+
+        // Validate required fields
+        if (!customer_info || !customer_info.email) {
+            return res.status(400).json({
+                success: false,
+                error: 'Customer email is required'
+            });
+        }
+
+        if (!line_items || line_items.length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'At least one item is required'
+            });
+        }
+
+        console.log(`Processing draft order for: ${customer_info.email}`);
+
+        // Validate inventory availability
+        const inventoryCheck = await validateInventoryForOrder(line_items);
+        const unavailableItems = inventoryCheck.filter(item => !item.available);
+
+        if (unavailableItems.length > 0) {
+            const unavailableList = unavailableItems.map(item =>
+                `${item.title || 'Item'} (requested: ${item.requested_quantity}, available: ${item.available_quantity || 0})`
+            ).join(', ');
+
+            const response = {
+                success: false,
+                error: 'insufficient_inventory',
+                message: `Sorry, some items are not available in the requested quantities: ${unavailableList}. Please adjust your order.`,
+                unavailable_items: unavailableItems,
+                call_id
+            };
+
+            // Log to Make.com
+            if (MAKE_WEBHOOK_URL) {
+                try {
+                    await axios.post(MAKE_WEBHOOK_URL, { ...response, type: 'order_failed' });
+                } catch (makeError) {
+                    console.error('Make.com webhook error:', makeError.message);
+                }
+            }
+
+            return res.json(response);
+        }
+
+        // Create draft order data
+        const orderData = {
+            customer: {
+                first_name: customer_info.first_name,
+                last_name: customer_info.last_name,
+                email: customer_info.email,
+                phone: customer_info.phone
+            },
+            line_items: line_items.map(item => ({
+                variant_id: item.variant_id,
+                quantity: item.quantity
+            })),
+            billing_address: billing_address || {
+                first_name: customer_info.first_name,
+                last_name: customer_info.last_name,
+                address1: shipping_address?.address1,
+                city: shipping_address?.city,
+                province: shipping_address?.province,
+                country: shipping_address?.country,
+                zip: shipping_address?.zip,
+                phone: customer_info.phone
+            },
+            shipping_address: shipping_address,
+            note: special_instructions
+        };
+
+        // Create draft order
+        const draftOrder = await createShopifyDraftOrder(orderData);
+
+        // Generate payment link
+        const paymentUrl = generatePaymentLink(draftOrder);
+
+        // Set expiration time (24 hours from now)
+        const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+        // Calculate total
+        const totalAmount = draftOrder.total_price;
+        const itemCount = draftOrder.line_items.reduce((sum, item) => sum + item.quantity, 0);
+
+        // Send payment link
+        await sendPaymentLink({
+            customer_email: customer_info.email,
+            customer_phone: customer_info.phone,
+            payment_url: paymentUrl,
+            order_number: draftOrder.name,
+            total_amount: totalAmount,
+            expires_at: expiresAt,
+            call_id: call_id
+        });
+
+        const response = {
+            success: true,
+            message: `Perfect! I've prepared your order #${draftOrder.name} for ${itemCount} item(s) totaling $${totalAmount}. I'm sending a secure payment link to ${customer_info.email} right now.`,
+            draft_order: {
+                order_number: draftOrder.name,
+                draft_order_id: draftOrder.id,
+                total_price: totalAmount,
+                currency: draftOrder.currency,
+                customer_email: customer_info.email,
+                payment_url: paymentUrl,
+                expires_at: expiresAt,
+                line_items: draftOrder.line_items.map(item => ({
+                    title: item.title,
+                    quantity: item.quantity,
+                    price: item.price
+                }))
+            },
+            call_id
+        };
+
+        // Log success to Make.com
+        if (MAKE_WEBHOOK_URL) {
+            try {
+                await axios.post(MAKE_WEBHOOK_URL, { ...response, type: 'draft_order_created' });
+            } catch (makeError) {
+                console.error('Make.com webhook error:', makeError.message);
+            }
+        }
+
+        res.json(response);
+
+    } catch (error) {
+        console.error('Draft Order Creation Error:', error);
+        const errorResponse = {
+            success: false,
+            error: 'draft_order_creation_failed',
+            message: 'I apologize, but I encountered an error while preparing your order. Please try again or contact our support team.',
+            call_id: req.body.call_id
+        };
+        res.status(500).json(errorResponse);
+    }
+});
+
+// Direct order placement endpoint (original functionality)
+app.post('/place-order-direct', async (req, res) => {
     try {
         const { 
             customer_info, 
@@ -328,7 +541,7 @@ app.post('/place-order', async (req, res) => {
             });
         }
         
-        console.log(`Processing order for: ${customer_info.email}`);
+        console.log(`Processing direct order for: ${customer_info.email}`);
         
         // Validate inventory availability
         const inventoryCheck = await validateInventoryForOrder(line_items);
@@ -435,6 +648,29 @@ app.post('/place-order', async (req, res) => {
     }
 });
 
+// Webhook handler for completed draft orders
+app.post('/draft-order-completed', async (req, res) => {
+    const { draft_order_id, order_id } = req.body;
+    
+    // Log successful conversion
+    console.log(`Draft order ${draft_order_id} converted to order ${order_id}`);
+    
+    // Send confirmation to Make.com
+    if (MAKE_WEBHOOK_URL) {
+        try {
+            await axios.post(MAKE_WEBHOOK_URL, {
+                type: 'order_confirmed',
+                draft_order_id: draft_order_id,
+                order_id: order_id
+            });
+        } catch (makeError) {
+            console.error('Make.com webhook error:', makeError.message);
+        }
+    }
+    
+    res.json({ success: true });
+});
+
 // Health check endpoint
 app.get('/health', (req, res) => {
     res.json({ status: 'OK', timestamp: new Date().toISOString() });
@@ -444,7 +680,7 @@ app.get('/health', (req, res) => {
 const PORT = process.env.PORT || 3000;
 if (require.main === module) {
     app.listen(PORT, () => {
-        console.log(`Shopify API running on port ${PORT}`);
+        console.log(`Enhanced Shopify API running on port ${PORT}`);
     });
 }
 
