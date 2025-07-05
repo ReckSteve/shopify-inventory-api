@@ -366,6 +366,13 @@ app.post('/check-inventory', async (req, res) => {
 // Enhanced order placement endpoint with payment processing (draft orders)
 app.post('/place-order', async (req, res) => {
     try {
+        // ADD THESE DEBUG LINES
+        console.log('=== RECEIVED PAYLOAD ===');
+        console.log('Full body:', JSON.stringify(req.body, null, 2));
+        console.log('customer_info:', req.body.customer_info);
+        console.log('customer_info.email:', req.body.customer_info?.email);
+        console.log('========================');
+        
         const {
             customer_info,
             line_items,
@@ -374,7 +381,6 @@ app.post('/place-order', async (req, res) => {
             special_instructions,
             call_id
         } = req.body;
-
         // Validate required fields
         if (!customer_info || !customer_info.email) {
             return res.status(400).json({
