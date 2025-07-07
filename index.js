@@ -128,7 +128,7 @@ async function createShopifyDraftOrder(orderData) {
                 note: orderData.note || 'Draft order created via Bland AI phone call',
                 tags: 'bland-ai,phone-order,draft',
                 email: orderData.customer.email,
-                send_invoice: false, // We'll send custom payment link
+                send_invoice: false, // We'll send custom invoice
                 use_customer_default_address: false
             }
         };
@@ -144,6 +144,35 @@ async function createShopifyDraftOrder(orderData) {
     } catch (error) {
         console.error('Shopify Draft Order Creation Error:', error.response?.data || error.message);
         throw new Error('Failed to create Shopify draft order');
+    }
+}
+
+// Helper function to send draft order invoice via Shopify API
+async function sendDraftOrderInvoice(draftOrderId, customMessage = '') {
+    try {
+        const url = `https://${SHOPIFY_CONFIG.shop_domain}/admin/api/2023-10/draft_orders/${draftOrderId}/send_invoice.json`;
+        
+        const payload = {
+            draft_order_invoice: {
+                to: undefined, // Will use customer email from draft order
+                from: undefined, // Will use store email
+                subject: 'Complete Your Order - Payment Link Inside',
+                custom_message: customMessage || 'Thank you for your phone order! Please click the link below to complete your payment.',
+                bcc: [] // Optional: add emails to BCC
+            }
+        };
+
+        const response = await axios.post(url, payload, {
+            headers: {
+                'X-Shopify-Access-Token': SHOPIFY_CONFIG.access_token,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        return response.data;
+    } catch (error) {
+        console.error('Shopify invoice sending error:', error.response?.data || error.message);
+        throw new Error('Failed to send invoice email');
     }
 }
 
@@ -178,36 +207,6 @@ async function createShopifyOrder(orderData) {
     } catch (error) {
         console.error('Shopify Order Creation Error:', error.response?.data || error.message);
         throw new Error('Failed to create Shopify order');
-    }
-}
-
-// Helper function to generate payment link
-function generatePaymentLink(draftOrder) {
-    // Shopify automatically generates payment URLs for draft orders
-    return `https://${SHOPIFY_CONFIG.shop_domain}/orders/${draftOrder.id}/checkout`;
-}
-
-// Helper function to send payment link (via Make.com)
-async function sendPaymentLink(paymentData) {
-    try {
-        const payload = {
-            type: 'send_payment_link',
-            customer_email: paymentData.customer_email,
-            customer_phone: paymentData.customer_phone,
-            payment_url: paymentData.payment_url,
-            order_number: paymentData.order_number,
-            total_amount: paymentData.total_amount,
-            expires_at: paymentData.expires_at,
-            call_id: paymentData.call_id
-        };
-
-        if (MAKE_WEBHOOK_URL) {
-            await axios.post(MAKE_WEBHOOK_URL, payload);
-        }
-        return { success: true };
-    } catch (error) {
-        console.error('Payment link sending error:', error.message);
-        return { success: false, error: error.message };
     }
 }
 
@@ -381,6 +380,7 @@ app.post('/place-order', async (req, res) => {
             special_instructions,
             call_id
         } = req.body;
+        
         // Validate required fields
         if (!customer_info || !customer_info.email) {
             return res.status(400).json({
@@ -456,26 +456,20 @@ app.post('/place-order', async (req, res) => {
         // Create draft order
         const draftOrder = await createShopifyDraftOrder(orderData);
 
-        // Generate payment link
-        const paymentUrl = generatePaymentLink(draftOrder);
+        // Send invoice email via Shopify
+        const customMessage = `Thank you for your phone order! Your order #${draftOrder.name} is ready for payment. Please click the link below to complete your purchase securely.`;
+        
+        try {
+            await sendDraftOrderInvoice(draftOrder.id, customMessage);
+            console.log(`Invoice email sent successfully for draft order ${draftOrder.id}`);
+        } catch (emailError) {
+            console.error('Failed to send invoice email:', emailError.message);
+            // Continue with the response even if email fails
+        }
 
-        // Set expiration time (24 hours from now)
-        const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-
-        // Calculate total
+        // Calculate totals
         const totalAmount = draftOrder.total_price;
         const itemCount = draftOrder.line_items.reduce((sum, item) => sum + item.quantity, 0);
-
-        // Send payment link
-        await sendPaymentLink({
-            customer_email: customer_info.email,
-            customer_phone: customer_info.phone,
-            payment_url: paymentUrl,
-            order_number: draftOrder.name,
-            total_amount: totalAmount,
-            expires_at: expiresAt,
-            call_id: call_id
-        });
 
         const response = {
             success: true,
@@ -486,8 +480,6 @@ app.post('/place-order', async (req, res) => {
                 total_price: totalAmount,
                 currency: draftOrder.currency,
                 customer_email: customer_info.email,
-                payment_url: paymentUrl,
-                expires_at: expiresAt,
                 line_items: draftOrder.line_items.map(item => ({
                     title: item.title,
                     quantity: item.quantity,
