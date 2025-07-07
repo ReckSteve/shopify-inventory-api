@@ -1,18 +1,24 @@
 {
-  "name": "shopify-inventory-api",
+  "name": "shopify-draft-order-api",
   "version": "1.0.0",
-  "description": "Shopify inventory check API for Bland AI",
+  "description": "API for creating Shopify draft orders via phone calls",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "dev": "node index.js"
+    "dev": "nodemon index.js"
   },
   "dependencies": {
+    "express": "^4.18.2",
     "axios": "^1.6.0",
-    "dotenv": "^16.3.1",
-    "express": "^4.18.2"
+    "cors": "^2.8.5"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
   },
   "engines": {
-    "node": "18.x"
-  }
+    "node": ">=18.0.0"
+  },
+  "keywords": ["shopify", "express", "api", "draft-orders"],
+  "author": "Your Name",
+  "license": "MIT"
 }
