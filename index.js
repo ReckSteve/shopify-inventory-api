@@ -1,3 +1,90 @@
+// Required imports
+const express = require('express');
+const axios = require('axios');
+const cors = require('cors');
+
+// Initialize Express app
+const app = express();
+
+// Middleware
+app.use(express.json());
+app.use(cors());
+
+// Environment variables / Configuration
+const SHOPIFY_CONFIG = {
+    shop_domain: process.env.SHOPIFY_SHOP_DOMAIN, // e.g., 'your-shop.myshopify.com'
+    access_token: process.env.SHOPIFY_ACCESS_TOKEN
+};
+
+const MAKE_WEBHOOK_URL = process.env.MAKE_WEBHOOK_URL;
+
+// Utility function to validate inventory
+async function validateInventoryForOrder(lineItems) {
+    const inventoryResults = [];
+    
+    for (const item of lineItems) {
+        try {
+            const url = `https://${SHOPIFY_CONFIG.shop_domain}/admin/api/2023-10/variants/${item.variant_id}.json`;
+            const response = await axios.get(url, {
+                headers: {
+                    'X-Shopify-Access-Token': SHOPIFY_CONFIG.access_token,
+                    'Content-Type': 'application/json'
+                }
+            });
+            
+            const variant = response.data.variant;
+            const available = variant.inventory_quantity >= item.quantity;
+            
+            inventoryResults.push({
+                variant_id: item.variant_id,
+                title: variant.title,
+                requested_quantity: item.quantity,
+                available_quantity: variant.inventory_quantity,
+                available: available
+            });
+        } catch (error) {
+            console.error(`Error checking inventory for variant ${item.variant_id}:`, error.message);
+            inventoryResults.push({
+                variant_id: item.variant_id,
+                title: 'Unknown Product',
+                requested_quantity: item.quantity,
+                available_quantity: 0,
+                available: false
+            });
+        }
+    }
+    
+    return inventoryResults;
+}
+
+// Function to send draft order invoice
+async function sendDraftOrderInvoice(draftOrderId, customMessage) {
+    try {
+        const url = `https://${SHOPIFY_CONFIG.shop_domain}/admin/api/2023-10/draft_orders/${draftOrderId}/send_invoice.json`;
+        
+        const invoiceData = {
+            draft_order_invoice: {
+                to: null, // Will use the customer email from the draft order
+                from: null, // Will use the shop email
+                subject: 'Complete Your Order - Payment Required',
+                custom_message: customMessage
+            }
+        };
+
+        const response = await axios.post(url, invoiceData, {
+            headers: {
+                'X-Shopify-Access-Token': SHOPIFY_CONFIG.access_token,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        return response.data;
+    } catch (error) {
+        console.error('Invoice sending error:', error.response?.data || error.message);
+        throw error;
+    }
+}
+
 // Enhanced createShopifyDraftOrder function with better debugging and error handling
 async function createShopifyDraftOrder(orderData) {
     try {
@@ -290,3 +377,25 @@ app.get('/test-shopify-connection', async (req, res) => {
         });
     }
 });
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+    res.json({
+        success: true,
+        message: 'Server is running',
+        timestamp: new Date().toISOString()
+    });
+});
+
+// For Vercel serverless functions, export the app
+module.exports = app;
+
+// For local development, start the server
+if (require.main === module) {
+    const PORT = process.env.PORT || 3000;
+    app.listen(PORT, () => {
+        console.log(`Server running on port ${PORT}`);
+        console.log(`Shop domain: ${SHOPIFY_CONFIG.shop_domain}`);
+        console.log(`Access token configured: ${!!SHOPIFY_CONFIG.access_token}`);
+    });
+}
