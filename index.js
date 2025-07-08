@@ -165,6 +165,13 @@ app.post('/place-order', async (req, res) => {
             call_id
         } = req.body;
         
+        // DEBUG: Log each piece of customer data
+        console.log('=== CUSTOMER DATA BREAKDOWN ===');
+        console.log('customer_info:', JSON.stringify(customer_info, null, 2));
+        console.log('shipping_address:', JSON.stringify(shipping_address, null, 2));
+        console.log('billing_address:', JSON.stringify(billing_address, null, 2));
+        console.log('================================');
+        
         // Validate required fields
         if (!customer_info || !customer_info.email) {
             console.error('Validation error: Customer email missing');
@@ -220,33 +227,52 @@ app.post('/place-order', async (req, res) => {
 
         console.log('Inventory validation passed, creating draft order...');
 
-        // Create draft order data
+        // FIXED: Better customer data handling with fallbacks
+        // Use shipping address as primary source if customer_info is incomplete
+        const customerData = {
+            first_name: customer_info.first_name || shipping_address?.first_name || 'Unknown',
+            last_name: customer_info.last_name || shipping_address?.last_name || 'Customer',
+            email: customer_info.email || shipping_address?.email,
+            phone: customer_info.phone || shipping_address?.phone
+        };
+
+        // DEBUG: Log the final customer data being used
+        console.log('=== FINAL CUSTOMER DATA ===');
+        console.log('Customer data to be used:', JSON.stringify(customerData, null, 2));
+        console.log('============================');
+
+        // Create draft order data with better data validation
         const orderData = {
-            customer: {
-                first_name: customer_info.first_name,
-                last_name: customer_info.last_name,
-                email: customer_info.email,
-                phone: customer_info.phone
-            },
+            customer: customerData,
             line_items: line_items.map(item => ({
                 variant_id: item.variant_id,
                 quantity: item.quantity
             })),
             billing_address: billing_address || {
-                first_name: customer_info.first_name,
-                last_name: customer_info.last_name,
+                first_name: customerData.first_name,
+                last_name: customerData.last_name,
                 address1: shipping_address?.address1,
                 city: shipping_address?.city,
                 province: shipping_address?.province,
                 country: shipping_address?.country,
                 zip: shipping_address?.zip,
-                phone: customer_info.phone
+                phone: customerData.phone
             },
-            shipping_address: shipping_address,
-            note: special_instructions
+            shipping_address: shipping_address || {
+                first_name: customerData.first_name,
+                last_name: customerData.last_name,
+                address1: 'Address not provided',
+                city: 'City not provided',
+                province: 'Province not provided',
+                country: 'Country not provided',
+                zip: 'Zip not provided'
+            },
+            note: special_instructions || 'Draft order created via Bland AI phone call'
         };
 
+        console.log('=== FINAL ORDER DATA ===');
         console.log('Order data prepared:', JSON.stringify(orderData, null, 2));
+        console.log('========================');
 
         // Create draft order
         const draftOrder = await createShopifyDraftOrder(orderData);
@@ -275,13 +301,14 @@ app.post('/place-order', async (req, res) => {
 
         const response = {
             success: true,
-            message: `Perfect! I've prepared your order #${draftOrder.name} for ${itemCount} item(s) totaling ${totalAmount}. ${invoiceEmailSent ? "I'm sending a secure payment link to " + customer_info.email + " right now." : "You can find the payment link in your order details."}`,
+            message: `Perfect! I've prepared your order #${draftOrder.name} for ${itemCount} item(s) totaling ${totalAmount}. ${invoiceEmailSent ? "I'm sending a secure payment link to " + customerData.email + " right now." : "You can find the payment link in your order details."}`,
             draft_order: {
                 order_number: draftOrder.name,
                 draft_order_id: draftOrder.id,
                 total_price: totalAmount,
                 currency: draftOrder.currency,
-                customer_email: customer_info.email,
+                customer_email: customerData.email,
+                customer_name: `${customerData.first_name} ${customerData.last_name}`,
                 payment_url: draftOrder.invoice_url, // This is the actual payment URL
                 expires_at: draftOrder.expires_at,
                 invoice_email_sent: invoiceEmailSent,
@@ -343,6 +370,75 @@ app.post('/place-order', async (req, res) => {
             call_id: req.body.call_id
         };
         res.status(500).json(errorResponse);
+    }
+});
+
+// Additional debugging endpoint to see what data is being received
+app.post('/debug-order-data', (req, res) => {
+    console.log('=== DEBUG ORDER DATA ===');
+    console.log('Full request body:', JSON.stringify(req.body, null, 2));
+    console.log('Headers:', JSON.stringify(req.headers, null, 2));
+    console.log('========================');
+    
+    res.json({
+        success: true,
+        received_data: req.body,
+        message: 'Data logged to console'
+    });
+});
+
+// Check inventory endpoint for Make.com scenario
+app.post('/check-inventory', async (req, res) => {
+    try {
+        console.log('=== INVENTORY CHECK REQUEST ===');
+        console.log('Request body:', JSON.stringify(req.body, null, 2));
+        console.log('================================');
+        
+        const { line_items } = req.body;
+        
+        // Validate input
+        if (!line_items || !Array.isArray(line_items) || line_items.length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'line_items array is required'
+            });
+        }
+        
+        // Check inventory for each item
+        const inventoryResults = await validateInventoryForOrder(line_items);
+        
+        // Determine overall availability
+        const allItemsAvailable = inventoryResults.every(item => item.available);
+        const unavailableItems = inventoryResults.filter(item => !item.available);
+        
+        const response = {
+            success: true,
+            all_items_available: allItemsAvailable,
+            inventory_results: inventoryResults,
+            unavailable_items: unavailableItems,
+            summary: {
+                total_items_checked: inventoryResults.length,
+                available_items: inventoryResults.filter(item => item.available).length,
+                unavailable_items: unavailableItems.length
+            }
+        };
+        
+        console.log('Inventory check response:', JSON.stringify(response, null, 2));
+        
+        res.json(response);
+        
+    } catch (error) {
+        console.error('=== INVENTORY CHECK ERROR ===');
+        console.error('Error:', error.message);
+        console.error('Stack:', error.stack);
+        console.error('==============================');
+        
+        res.status(500).json({
+            success: false,
+            error: 'inventory_check_failed',
+            message: 'Failed to check inventory',
+            details: error.message
+        });
     }
 });
 
