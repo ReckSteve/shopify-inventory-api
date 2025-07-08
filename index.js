@@ -230,10 +230,10 @@ app.post('/place-order', async (req, res) => {
         // FIXED: Better customer data handling with fallbacks
         // Use shipping address as primary source if customer_info is incomplete
         const customerData = {
-            first_name: customer_info.first_name || shipping_address?.first_name || 'Unknown',
-            last_name: customer_info.last_name || shipping_address?.last_name || 'Customer',
-            email: customer_info.email || shipping_address?.email,
-            phone: customer_info.phone || shipping_address?.phone
+            first_name: customer_info.first_name || 'Unknown',
+            last_name: customer_info.last_name || 'Customer',
+            email: customer_info.email,
+            phone: customer_info.phone || ''
         };
 
         // DEBUG: Log the final customer data being used
@@ -494,4 +494,4 @@ if (require.main === module) {
         console.log(`Shop domain: ${SHOPIFY_CONFIG.shop_domain}`);
         console.log(`Access token configured: ${!!SHOPIFY_CONFIG.access_token}`);
     });
-}
+}s
