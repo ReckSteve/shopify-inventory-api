@@ -14,18 +14,16 @@ const MAKE_WEBHOOK_URL = process.env.MAKE_WEBHOOK_URL;
 async function createShopifyDraftOrder(orderData) {
     try {
         const url = `https://${SHOPIFY_CONFIG.shop_domain}/admin/api/2023-10/draft_orders.json`;
-        // *** CRITICAL FIX HERE ***
-        // Corrected syntax for defining the draftOrder object and its customer property
-        // The original PDF had `const draftOrder =${` and `customer, orderData.customer,`
-        // It should be `const draftOrder = {` and `customer: orderData.customer,`
         const draftOrder = {
             draft_order: {
                 line_items: orderData.line_items,
-                customer: orderData.customer, // Corrected from comma to colon
+                customer: orderData.customer,
                 billing_address: orderData.billing_address,
                 shipping_address: orderData.shipping_address,
-                note: orderData.note || 'Draft order created via Bland AI phone call',
-                tags: 'bland-ai,phone-order,draft',
+                // CHANGED: Note designation
+                note: orderData.note || 'Draft order created via AI Voice Agent phone call',
+                // CHANGED: Tag designation
+                tags: 'ai-voice-agent,phone-order,draft',
                 email: orderData.customer.email,
                 send_invoice: false, // We'll send custom payment link
                 use_customer_default_address: false
@@ -45,16 +43,16 @@ async function createShopifyDraftOrder(orderData) {
 }
 
 // Helper function to send draft order invoice via Shopify's API
-// This will trigger Shopify to send the default draft order invoice email
-async function sendDraftOrderInvoice(draftOrderId, customMessage) {
+async function sendDraftOrderInvoice(draftOrderId, customMessage, customerEmail) {
     try {
         const url = `https://${SHOPIFY_CONFIG.shop_domain}/admin/api/2023-10/draft_orders/${draftOrderId}/send_invoice.json`;
         const payload = {
             draft_order_invoice: {
-                to: "customer", // Sends to the customer email associated with the draft order
-                custom_message: customMessage // Optional custom message
+                to: customerEmail,
+                custom_message: customMessage
             }
         };
+        console.log(`Sending invoice to: ${customerEmail}`);
         const response = await axios.post(url, payload, {
             headers: {
                 'X-Shopify-Access-Token': SHOPIFY_CONFIG.access_token,
@@ -175,7 +173,6 @@ app.post('/place-order', async (req, res) => {
 
         console.log('Inventory validation passed, creating draft order...');
 
-        // FIXED: Use customer data directly from request - no fallbacks to stored data
         const customerData = {
             first_name: customer_info.first_name || 'Unknown',
             last_name: customer_info.last_name || 'Customer',
@@ -188,7 +185,6 @@ app.post('/place-order', async (req, res) => {
         console.log('Final customerData:', JSON.stringify(customerData, null, 2));
         console.log('================================');
 
-        // Create draft order data with customer info directly in addresses
         const orderData = {
             customer: customerData,
             line_items: line_items.map(item => ({
@@ -198,7 +194,7 @@ app.post('/place-order', async (req, res) => {
             billing_address: {
                 first_name: customerData.first_name,
                 last_name: customerData.last_name,
-                email: customerData.email, // Added email to billing address
+                email: customerData.email,
                 phone: customerData.phone,
                 address1: billing_address?.address1 || shipping_address?.address1 || 'Address not provided',
                 city: billing_address?.city || shipping_address?.city || 'City not provided',
@@ -216,7 +212,8 @@ app.post('/place-order', async (req, res) => {
                 country: shipping_address?.country || 'Country not provided',
                 zip: shipping_address?.zip || 'Zip not provided'
             },
-            note: special_instructions || 'Draft order created via Bland AI phone call'
+            // CHANGED: Note designation
+            note: special_instructions || 'Draft order created via AI Voice Agent phone call'
         };
 
         console.log('=== FINAL ORDER DATA ===');
@@ -235,7 +232,7 @@ app.post('/place-order', async (req, res) => {
         let invoiceEmailSent = false;
         try {
             console.log('Sending invoice email...');
-            await sendDraftOrderInvoice(draftOrder.id, customMessage);
+            await sendDraftOrderInvoice(draftOrder.id, customMessage, customerData.email);
             console.log(`Invoice email sent successfully for draft order ${draftOrder.id}`);
             invoiceEmailSent = true;
         } catch (emailError) {
@@ -259,7 +256,8 @@ app.post('/place-order', async (req, res) => {
                 total_price: totalAmount,
                 currency: draftOrder.currency,
                 customer_email: customerData.email,
-                payment_url: draftOrder.invoice_url, // Shopify automatically generates this for draft orders
+                customer_name: `${customerData.first_name} ${customerData.last_name}`,
+                payment_url: draftOrder.invoice_url,
                 expires_at: draftOrder.expires_at,
                 invoice_email_sent: invoiceEmailSent,
                 line_items: draftOrder.line_items.map(item => ({
@@ -281,7 +279,7 @@ app.post('/place-order', async (req, res) => {
                     ...response,
                     type: 'draft_order_created'
                 }, {
-                    timeout: 10000, // 10-second timeout
+                    timeout: 10000,
                     headers: {
                         'Content-Type': 'application/json'
                     }
@@ -316,15 +314,4 @@ app.get('/', (req, res) => {
     res.status(200).send('Shopify Order Placement API is running!');
 });
 
-// Listener (important for Vercel or any server to run)
-// Vercel automatically handles the server listening, but for local testing, this is crucial.
-// For explicit local execution or other environments, you'd typically have:
-/*
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-});
-*/
-
-// For Vercel, you might explicitly export the app
 module.exports = app;
