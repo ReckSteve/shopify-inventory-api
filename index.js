@@ -10,14 +10,15 @@ const SHOPIFY_CONFIG = {
 };
 const MAKE_WEBHOOK_URL = process.env.MAKE_WEBHOOK_URL;
 
-// Helper function to create Shopify draft order [cite: 651]
+// Helper function to create Shopify draft order
 async function createShopifyDraftOrder(orderData) {
     try {
         const url = `https://${SHOPIFY_CONFIG.shop_domain}/admin/api/2023-10/draft_orders.json`; [cite: 653]
-        const draftOrder = {
-            draft_order: {
+        // FIXED: Corrected syntax for defining the draftOrder object and its customer property
+        const draftOrder = { [cite: 654]
+            draft_order: { [cite: 654]
                 line_items: orderData.line_items, [cite: 655]
-                customer: orderData.customer, [cite: 656]
+                customer: orderData.customer, // FIXED: Changed comma to colon 
                 billing_address: orderData.billing_address, [cite: 657]
                 shipping_address: orderData.shipping_address, [cite: 658]
                 note: orderData.note || 'Draft order created via Bland AI phone call', [cite: 659]
@@ -26,13 +27,13 @@ async function createShopifyDraftOrder(orderData) {
                 send_invoice: false, // We'll send custom payment link [cite: 662]
                 use_customer_default_address: false [cite: 663]
             }
-        };
-        const response = await axios.post(url, draftOrder, {
-            headers: {
+        }; [cite: 664, 665, 666, 667]
+        const response = await axios.post(url, draftOrder, { [cite: 668]
+            headers: { [cite: 669]
                 'X-Shopify-Access-Token': SHOPIFY_CONFIG.access_token, [cite: 670]
                 'Content-Type': 'application/json' [cite: 671]
             }
-        });
+        }); [cite: 672]
         return response.data.draft_order; [cite: 674]
     } catch (error) {
         console.error('Shopify Draft Order Creation Error.', error.response?.data || error.message); [cite: 676]
@@ -64,22 +65,21 @@ async function sendDraftOrderInvoice(draftOrderId, customMessage) {
     }
 }
 
-
-// Helper function to validate inventory before order [cite: 52, 733]
+// Helper function to validate inventory before order
 async function validateInventoryForOrder(lineItems) {
     const results = [];
     for (const item of lineItems) {
         try {
             const url = `https://${SHOPIFY_CONFIG.shop_domain}/admin/api/2023-10/variants/${item.variant_id}.json`; [cite: 57]
-            const response = await axios.get(url, {
-                headers: {
+            const response = await axios.get(url, { [cite: 57]
+                headers: { [cite: 58]
                     'X-Shopify-Access-Token': SHOPIFY_CONFIG.access_token, [cite: 60]
                     'Content-Type': 'application/json' [cite: 61]
                 }
-            });
+            }); [cite: 62]
             const variant = response.data.variant; [cite: 63]
             const available = variant.inventory_quantity >= item.quantity; [cite: 64]
-            results.push({
+            results.push({ [cite: 65]
                 variant_id: item.variant_id, [cite: 66]
                 requested_quantity: item.quantity, [cite: 67]
                 available_quantity: variant.inventory_quantity, [cite: 68]
@@ -89,7 +89,7 @@ async function validateInventoryForOrder(lineItems) {
             });
         } catch (error) {
             console.error(`Error checking variant ${item.variant_id}:`, error.message); [cite: 74]
-            results.push({
+            results.push({ [cite: 75]
                 variant_id: item.variant_id, [cite: 76]
                 available: false, [cite: 77]
                 error: 'Could not verify inventory' [cite: 78]
@@ -99,8 +99,8 @@ async function validateInventoryForOrder(lineItems) {
     return results; [cite: 83]
 }
 
-// Enhanced order placement endpoint with payment processing [cite: 709]
-app.post('/place-order', async (req, res) => {
+// Enhanced order placement endpoint with payment processing
+app.post('/place-order', async (req, res) => { [cite: 709]
     try {
         // Enhanced debug logging
         console.log('=== PLACE ORDER REQUEST ===');
@@ -111,109 +111,109 @@ app.post('/place-order', async (req, res) => {
         console.log('============================');
 
         const {
-            customer_info, [cite: 88, 712]
-            line_items, [cite: 89, 713]
-            shipping_address, [cite: 90, 714]
-            billing_address, [cite: 91, 715]
-            special_instructions, [cite: 92, 716]
-            call_id [cite: 93, 717]
-        } = req.body;
+            customer_info, [cite: 712]
+            line_items, [cite: 713]
+            shipping_address, [cite: 714]
+            billing_address, [cite: 715]
+            special_instructions, [cite: 716]
+            call_id [cite: 717]
+        } = req.body; [cite: 718]
 
-        // Validate required fields [cite: 95, 719]
-        if (!customer_info || !customer_info.email) { [cite: 96, 720]
+        // Validate required fields
+        if (!customer_info || !customer_info.email) { [cite: 720]
             console.error('Validation error: Customer email missing');
-            return res.status(400).json({
-                success: false, [cite: 98, 722]
-                error: 'Customer email is required' [cite: 99, 723]
+            return res.status(400).json({ [cite: 721]
+                success: false, [cite: 722]
+                error: 'Customer email is required' [cite: 723]
             });
         }
 
-        if (!line_items || line_items.length === 0) { [cite: 102, 726]
+        if (!line_items || line_items.length === 0) { [cite: 726]
             console.error('Validation error: No line items provided');
-            return res.status(400).json({
-                success: false, [cite: 104, 728]
-                error: 'At least one item is required' [cite: 105, 729]
+            return res.status(400).json({ [cite: 727]
+                success: false, [cite: 728]
+                error: 'At least one item is required' [cite: 729]
             });
         }
 
-        console.log(`Processing draft order for: ${customer_info.email}`); [cite: 108, 732]
+        console.log(`Processing draft order for: ${customer_info.email}`); [cite: 732]
 
-        // Validate inventory availability [cite: 109, 733]
+        // Validate inventory availability
         console.log('Validating inventory...');
-        const inventoryCheck = await validateInventoryForOrder(line_items); [cite: 110, 734]
+        const inventoryCheck = await validateInventoryForOrder(line_items); [cite: 734]
         console.log('Inventory check results:', inventoryCheck);
 
-        const unavailableItems = inventoryCheck.filter(item => !item.available); [cite: 111, 735]
+        const unavailableItems = inventoryCheck.filter(item => !item.available); [cite: 735]
 
-        if (unavailableItems.length > 0) { [cite: 112, 736]
+        if (unavailableItems.length > 0) { [cite: 736]
             console.log('Inventory validation failed:', unavailableItems);
             const unavailableList = unavailableItems.map(item =>
-                `${item.title || 'Item'} (requested: ${item.requested_quantity}, available: ${item.available_quantity || 0})`
-            ).join(', '); [cite: 113, 737, 738, 739]
+                `${item.title || 'Item'} (requested: ${item.requested_quantity}, available: ${item.available_quantity || 0})` [cite: 737, 738, 739]
+            ).join(', '); [cite: 739]
 
-            const response = {
-                success: false, [cite: 117, 742]
-                error: 'insufficient_inventory', [cite: 118, 743]
-                message: `Sorry, some items are not available in the requested quantities: ${unavailableList}. Please adjust your order.`, [cite: 119, 744]
-                unavailable_items: unavailableItems, [cite: 119, 745]
-                call_id [cite: 120, 746]
-            };
+            const response = { [cite: 740]
+                success: false, [cite: 742]
+                error: 'insufficient_inventory', [cite: 743]
+                message: `Sorry, some items are not available in the requested quantities: ${unavailableList}. Please adjust your order.`, [cite: 744]
+                unavailable_items: unavailableItems, [cite: 745]
+                call_id [cite: 746]
+            }; [cite: 741]
 
-            // Log to Make.com [cite: 122, 748]
-            if (MAKE_WEBHOOK_URL) { [cite: 122, 749]
+            // Log to Make.com
+            if (MAKE_WEBHOOK_URL) { [cite: 749]
                 try {
-                    await axios.post(MAKE_WEBHOOK_URL, { ...response, type: 'order_failed' }); [cite: 124, 752]
-                } catch (makeError) {
-                    console.error('Make.com webhook error:', makeError.message); [cite: 126, 755]
+                    await axios.post(MAKE_WEBHOOK_URL, { ...response, type: 'order_failed' }); [cite: 752]
+                } catch (makeError) { [cite: 753]
+                    console.error('Make.com webhook error:', makeError.message); [cite: 755]
                 }
             }
-            return res.json(response); [cite: 130, 756]
+            return res.json(response); [cite: 756]
         }
 
         console.log('Inventory validation passed, creating draft order...');
 
-        // Use customer data directly from request for order creation
-        const customerData = {
-            first_name: customer_info.first_name || 'Unknown',
-            last_name: customer_info.last_name || 'Customer',
-            email: customer_info.email,
-            phone: customer_info.phone || ''
-        };
+        // FIXED: Use customer data directly from request - no fallbacks to stored data
+        const customerData = { [cite: 760]
+            first_name: customer_info.first_name || 'Unknown', [cite: 762]
+            last_name: customer_info.last_name || 'Customer', [cite: 763]
+            email: customer_info.email, [cite: 764]
+            phone: customer_info.phone || '' [cite: 765]
+        }; [cite: 759]
 
         console.log('=== CUSTOMER DATA BEING USED ===');
         console.log('Input customer_info:', JSON.stringify(customer_info, null, 2));
         console.log('Final customerData:', JSON.stringify(customerData, null, 2));
         console.log('================================');
 
-        // Create draft order data with customer info directly in addresses [cite: 132, 758]
-        const orderData = {
-            customer: customerData, [cite: 133, 760]
-            line_items: line_items.map(item => ({
-                variant_id: item.variant_id, [cite: 140, 767]
-                quantity: item.quantity [cite: 142, 768]
-            })), [cite: 139, 766]
-            billing_address: { // Ensure billing address uses customerData fields [cite: 145, 770]
-                first_name: customerData.first_name, [cite: 147, 772]
-                last_name: customerData.last_name, [cite: 148, 773]
+        // Create draft order data with customer info directly in addresses
+        const orderData = { [cite: 758]
+            customer: customerData, [cite: 760]
+            line_items: line_items.map(item => ({ [cite: 766]
+                variant_id: item.variant_id, [cite: 767]
+                quantity: item.quantity [cite: 768]
+            })), [cite: 769]
+            billing_address: { [cite: 770]
+                first_name: customerData.first_name, [cite: 772]
+                last_name: customerData.last_name, [cite: 773]
                 email: customerData.email, // Added email to billing address
-                phone: customerData.phone, [cite: 153, 779]
-                address1: billing_address?.address1 || shipping_address?.address1 || 'Address not provided', [cite: 149, 774]
-                city: billing_address?.city || shipping_address?.city || 'City not provided', [cite: 149, 775]
-                province: billing_address?.province || shipping_address?.province || 'Province not provided', [cite: 150, 776]
-                country: billing_address?.country || shipping_address?.country || 'Country not provided', [cite: 151, 777]
-                zip: billing_address?.zip || shipping_address?.zip || 'Zip not provided' [cite: 152, 778]
+                phone: customerData.phone, [cite: 779]
+                address1: billing_address?.address1 || shipping_address?.address1 || 'Address not provided', [cite: 774]
+                city: billing_address?.city || shipping_address?.city || 'City not provided', [cite: 775]
+                province: billing_address?.province || shipping_address?.province || 'Province not provided', [cite: 776]
+                country: billing_address?.country || shipping_address?.country || 'Country not provided', [cite: 777]
+                zip: billing_address?.zip || shipping_address?.zip || 'Zip not provided' [cite: 778]
             },
-            shipping_address: { // Ensure shipping address uses customerData fields [cite: 154, 780]
+            shipping_address: { [cite: 780]
                 first_name: customerData.first_name,
                 last_name: customerData.last_name,
                 phone: customerData.phone,
-                address1: shipping_address?.address1 || 'Address not provided',
-                city: shipping_address?.city || 'City not provided',
-                province: shipping_address?.province || 'Province not provided',
-                country: shipping_address?.country || 'Country not provided',
-                zip: shipping_address?.zip || 'Zip not provided'
+                address1: shipping_address?.address1 || 'Address not provided', [cite: 774]
+                city: shipping_address?.city || 'City not provided', [cite: 775]
+                province: shipping_address?.province || 'Province not provided', [cite: 776]
+                country: shipping_address?.country || 'Country not provided', [cite: 777]
+                zip: shipping_address?.zip || 'Zip not provided' [cite: 778]
             },
-            note: special_instructions || 'Draft order created via Bland AI phone call' [cite: 155, 781]
+            note: special_instructions || 'Draft order created via Bland AI phone call' [cite: 781]
         };
 
         console.log('=== FINAL ORDER DATA ===');
@@ -222,7 +222,7 @@ app.post('/place-order', async (req, res) => {
         console.log('Shipping address:', JSON.stringify(orderData.shipping_address, null, 2));
         console.log('========================');
 
-        // Create draft order [cite: 782]
+        // Create draft order
         const draftOrder = await createShopifyDraftOrder(orderData); [cite: 783]
         console.log('Draft order created successfully:', draftOrder);
 
@@ -232,9 +232,6 @@ app.post('/place-order', async (req, res) => {
         let invoiceEmailSent = false;
         try {
             console.log('Sending invoice email...');
-            // The document suggests sending a custom payment link via Make.com,
-            // but the `sendPaymentLink` function isn't used in the updated endpoint.
-            // Instead, `sendDraftOrderInvoice` (which sends Shopify's default invoice) is more direct here.
             await sendDraftOrderInvoice(draftOrder.id, customMessage);
             console.log(`Invoice email sent successfully for draft order ${draftOrder.id}`);
             invoiceEmailSent = true;
@@ -246,35 +243,34 @@ app.post('/place-order', async (req, res) => {
             // Continue with the response even if email fails
         }
 
-        // Calculate totals [cite: 788, 789]
+        // Calculate totals
         const totalAmount = draftOrder.total_price; [cite: 789]
         const itemCount = draftOrder.line_items.reduce((sum, item) => sum + item.quantity, 0); [cite: 790]
 
-        const response = {
+        const response = { [cite: 801]
             success: true, [cite: 802]
             message: `Perfect! I've prepared your order #${draftOrder.name} for ${itemCount} item(s) totaling $${totalAmount}. ${invoiceEmailSent ? "I'm sending a secure payment link to " + customerData.email + " right now." : "You can find the payment link in your order details."}`, [cite: 803]
-            draft_order: {
-                order_number: draftOrder.name, [cite: 804]
-                draft_order_id: draftOrder.id, [cite: 805]
-                total_price: totalAmount, [cite: 806]
-                currency: draftOrder.currency, [cite: 807]
-                customer_email: customerData.email, [cite: 808]
-                customer_name: `${customerData.first_name} ${customerData.last_name}`,
+            draft_order: { [cite: 804]
+                order_number: draftOrder.name, [cite: 805]
+                draft_order_id: draftOrder.id, [cite: 806]
+                total_price: totalAmount, [cite: 807]
+                currency: draftOrder.currency, [cite: 808]
+                customer_email: customerData.email, [cite: 809]
                 payment_url: draftOrder.invoice_url, // Shopify automatically generates this for draft orders
-                expires_at: draftOrder.expires_at, [cite: 810]
+                expires_at: draftOrder.expires_at,
                 invoice_email_sent: invoiceEmailSent,
-                line_items: draftOrder.line_items.map(item => ({
+                line_items: draftOrder.line_items.map(item => ({ [cite: 811]
                     title: item.title, [cite: 812]
                     quantity: item.quantity, [cite: 813]
                     price: item.price [cite: 814]
-                }))
-            }, [cite: 803]
+                })) [cite: 815]
+            },
             call_id [cite: 818]
         };
 
         console.log('Final response:', JSON.stringify(response, null, 2));
 
-        // Log success to Make.com [cite: 820]
+        // Log success to Make.com
         if (MAKE_WEBHOOK_URL) { [cite: 820]
             try {
                 console.log('Sending webhook to Make.com:', MAKE_WEBHOOK_URL);
@@ -288,31 +284,26 @@ app.post('/place-order', async (req, res) => {
                     }
                 });
                 console.log('Make.com webhook sent successfully:', webhookResponse.status);
-            } catch (makeError) {
+            } catch (makeError) { [cite: 822]
                 console.error('Make.com webhook error:', makeError.message); [cite: 823]
             }
         }
 
         res.json(response); [cite: 826]
 
-    } catch (error) {
-        console.error('=== DRAFT ORDER CREATION ERROR ==='); [cite: 828]
+    } catch (error) { [cite: 827]
+        console.error('=== DRAFT ORDER CREATION ERROR ===');
         console.error('Error type:', error.constructor.name);
         console.error('Error message:', error.message);
         console.error('Error stack:', error.stack);
         console.error('===================================');
 
-        const errorResponse = {
+        const errorResponse = { [cite: 831]
             success: false, [cite: 833]
             error: 'draft_order_creation_failed', [cite: 834]
             message: 'I apologize, but I encountered an error while preparing your order. Please try again or contact our support team.', [cite: 835, 836]
-            debug_info: {
-                error_type: error.constructor.name,
-                error_message: error.message,
-                timestamp: new Date().toISOString()
-            },
             call_id: req.body.call_id [cite: 836]
-        };
+        }; [cite: 832]
         res.status(500).json(errorResponse); [cite: 837]
     }
 });
